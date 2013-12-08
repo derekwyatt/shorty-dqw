@@ -16,21 +16,34 @@ trait ShortyService extends HttpService with SprayJsonSupport with ShortyProtoco
 
   implicit val futureEC: ExecutionContext
 
-  val route = path("hashes") {
+  val route =
     post {
-      respondWithMediaType(MediaTypes.`application/json`) {
-        headerValueByName("Host") { host =>
-          entity(as[HashCreateRequest]) { req =>
-            complete {
-              logic.shorten(req.urlToShorten) map { hash =>
-                HashCreateResponse(req.encodedPrefix.map(pre => s"$pre/$hash").getOrElse(hash),
-                                   req.urlToShorten,
-                                   s"http://$host/hashes/$hash")
+      path("hashes") {
+        respondWithMediaType(MediaTypes.`application/json`) {
+          headerValueByName("Host") { host =>
+            entity(as[HashCreateRequest]) { req =>
+              complete {
+                logic.shorten(req.urlToShorten) map { hash =>
+                  HashCreateResponse(req.encodedPrefix.map(pre => s"$pre/$hash").getOrElse(hash),
+                    req.urlToShorten,
+                    s"http://$host/hashes/$hash")
+                }
               }
             }
           }
         }
       }
+    } ~
+    get {
+      path("hashes" / Segment) { hash =>
+        complete {
+          OK
+        }
+      } ~
+      path(Segment) { hash =>
+        complete {
+          OK
+        }
+      }
     }
-  }
 }
