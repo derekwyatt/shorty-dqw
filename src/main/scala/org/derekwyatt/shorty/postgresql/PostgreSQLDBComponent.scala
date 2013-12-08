@@ -20,11 +20,15 @@ trait DBComponent {
   }
 }
 
-trait PostgreSQLDBComponent extends DBComponent with ConfigComponent {
-  type Configuration <: PostgreSQLConfiguration
-  type Statement = PSQLStatement
-  type Result = QueryResult
+trait PostgreSQLConfiguration extends ConfigComponent {
+  type Configuration <: PostgreSQLConfig
 
+  trait PostgreSQLConfig {
+    val connectionUrl: String
+  }
+}
+
+trait PostgreSQLDBComponent extends DBComponent with PostgreSQLConfiguration {
   class PostgreSQLDB extends DB {
     val configuration = URLParser.parse(config.connectionUrl)
     val connection: Connection = new PostgreSQLConnection(configuration)
@@ -38,9 +42,5 @@ trait PostgreSQLDBComponent extends DBComponent with ConfigComponent {
 
     def delete(stmt: PSQLStatement)(implicit ec: ExecutionContext): Future[QueryResult] =
       connection.sendPreparedStatement(stmt.stmt, stmt.values)
-  }
-
-  trait PostgreSQLConfiguration {
-    val connectionUrl: String
   }
 }

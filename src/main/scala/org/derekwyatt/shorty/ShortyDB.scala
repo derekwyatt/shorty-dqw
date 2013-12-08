@@ -4,9 +4,8 @@ import org.derekwyatt.shorty.postgresql._
 import org.derekwyatt.ConfigComponent
 import scala.concurrent.{ExecutionContext, Future}
 
-trait ShortyDB extends ConfigComponent { this: DBComponent =>
+trait ShortyDB extends ShortyDBConfiguration { this: DBComponent =>
   import com.github.mauricio.async.db.QueryResult
-  type Configuration <: ShortyDBConfig
 
   def extractOneString(queryResult: QueryResult, colName: String): Option[String] =
     if (queryResult.rowsAffected >= 1) {
@@ -40,10 +39,14 @@ trait ShortyDB extends ConfigComponent { this: DBComponent =>
       }
     }
 
-  def getHash(hash: String)(implicit ec: ExecutionContext): Future[Option[String]] =
-    db.select(PSQLStatement(config.selectHashStmt, List(hash))) map { queryResult =>
+  def getHash(url: String)(implicit ec: ExecutionContext): Future[Option[String]] =
+    db.select(PSQLStatement(config.selectHashStmt, List(url))) map { queryResult =>
       extractOneString(queryResult, "hash")
     }
+}
+
+trait ShortyDBConfiguration extends ConfigComponent {
+  type Configuration <: ShortyDBConfig
 
   trait ShortyDBConfig {
     val hashUrlTableName: String
@@ -64,9 +67,9 @@ object ShortyDBApp extends App {
 
   val conf = ConfigFactory.load().getConfig("org.derekwyatt.shorty.persistence")
   val db = new ShortyDB with postgresql.PostgreSQLDBComponent {
-    type Configuration = ShortyDBConfig with PostgreSQLConfiguration
+    type Configuration = ShortyDBConfig with PostgreSQLConfig
     lazy val db = new PostgreSQLDB
-    object config extends ShortyDBConfig with PostgreSQLConfiguration {
+    object config extends ShortyDBConfig with PostgreSQLConfig {
       val connectionUrl = "jdbc:postgresql://localhost:5432/shorty"
       val hashUrlTableName = conf.getString("hash-to-url-table")
       val insertHashStmt = conf.getString("insert-hash-statement")

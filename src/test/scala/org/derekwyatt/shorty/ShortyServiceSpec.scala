@@ -19,8 +19,10 @@ class ShortyServiceSpec extends WordSpec with Matchers with ScalatestRouteTest w
   val hash = "aaaaa"
   def withHost = addHeader(Host("localhost", 8080))
 
-  class TestShortyService extends ShortyService with StaticShortyLogicComponent with ShortyProtocol {
+  class TestShortyService extends ShortyService with StaticShortyLogicComponent with ShortyProtocol with TestShortyDB with ProductionConfiguration {
     def actorRefFactory = system
+    lazy val db = new NilDB
+    lazy val sysConfig = system.settings.config
     lazy val futureEC = executionContext(1)
     lazy val staticShortenedHash = hash
   }
