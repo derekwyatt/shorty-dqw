@@ -7,7 +7,7 @@ create table hash_to_url (
 drop table if exists hash_clicks;
 create table hash_clicks (
   hash varchar(8),
-  stamp timestamp,
+  stamp timestamp default current_timestamp,
   ipaddr varchar(64),
   primary key (hash, stamp, ipaddr)
 );
