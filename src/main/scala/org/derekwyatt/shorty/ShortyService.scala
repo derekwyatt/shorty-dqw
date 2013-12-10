@@ -1,17 +1,18 @@
 package org.derekwyatt.shorty
 
 import akka.actor.Scheduler
+import akka.event.Logging
 import akka.pattern.CircuitBreaker
-import org.derekwyatt.shorty.postgresql.DBComponent
 import org.derekwyatt.ConfigComponent
 import scala.concurrent.duration._
 import scala.concurrent.{ExecutionContext, future}
 import spray.http.{ContentTypes, HttpHeader, MediaTypes}
 import spray.http.StatusCodes._
-import spray.http.{HttpResponse, HttpEntity}
+import spray.http.{HttpRequest, HttpResponse, HttpEntity}
 import spray.http.HttpHeaders.Location
 import spray.httpx.SprayJsonSupport
-import spray.routing.HttpService
+import spray.routing.{HttpService, Rejection}
+import spray.routing.directives.{DebuggingDirectives, LogEntry}
 
 /**
  * Defines helpers for the [[ShortyService]].
@@ -48,9 +49,10 @@ trait ShortyServiceConfigComponent extends ConfigComponent {
  */
 trait ShortyService extends HttpService
                        with SprayJsonSupport
-                       with ShortyProtocol { this: ShortyDBComponent with ShortyLogicComponent
-                                                                     with DBComponent
-                                                                     with ShortyServiceConfigComponent =>
+                       with ShortyProtocol
+                       with DebuggingDirectives { this: ShortyDBComponent with ShortyLogicComponent
+                                                                          with DBComponent
+                                                                          with ShortyServiceConfigComponent =>
 
   /**
    * The calls we're going to make are non-blocking and require a that we
@@ -82,6 +84,19 @@ trait ShortyService extends HttpService
       req.urlToShorten,
       s"http://$host/hashes/$hash")
 
+  def createLogEntry(request: HttpRequest, text: String): Some[LogEntry] =
+    Some(LogEntry(s"#### Request $request => $text", Logging.DebugLevel))
+  
+  def myLog(request: HttpRequest): Any => Option[LogEntry] = { 
+    case x: HttpResponse => {
+      x.entity match {
+        case m => createLogEntry(request, m.toString)
+      }
+    }
+    case spray.routing.Rejected(rejections) => createLogEntry(request, s"Rejection ${rejections.toString()}")
+    case x => createLogEntry(request, x.toString())
+  }
+
   /**
    * In order to protect the service (and the database) from being asked to do
    * too much, we use a circuit breaker.  This circuit breaker fronts all of the
@@ -98,50 +113,52 @@ trait ShortyService extends HttpService
    * The HTTP route that has been defined for REST
    */
   val route =
-    post {
-      (path("hashes") | path("v1" / "hashes")) {
-        respondWithMediaType(MediaTypes.`application/json`) {
-          headerValueByName("Host") { host =>
-            entity(as[HashCreateRequest]) { req =>
-              complete {
-                shortydb.getHash(req.urlToShorten) flatMap {
-                  case Some(hash) => 
-                    future(hashCreateResponse(hash, host, req))
-                  case None =>
-                    for {
-                      hash <- logic.shorten(req.urlToShorten)
-                      finished <- shortydb.insertHash(hash, req.urlToShorten)
-                    } yield hashCreateResponse(hash, host, req)
+    logRequestResponse(myLog _) {
+      post {
+        (path("shorty" / "hashes") | path("shorty" / "v1" / "hashes")) {
+          respondWithMediaType(MediaTypes.`application/json`) {
+            headerValueByName("Host") { host =>
+              entity(as[HashCreateRequest]) { req =>
+                complete {
+                  shortydb.getHash(req.urlToShorten) flatMap {
+                    case Some(hash) => 
+                      future(hashCreateResponse(hash, host, req))
+                    case None =>
+                      for {
+                        hash <- logic.shorten(req.urlToShorten)
+                        finished <- shortydb.insertHash(hash, req.urlToShorten)
+                      } yield hashCreateResponse(hash, host, req)
+                  }
                 }
               }
             }
           }
         }
-      }
-    } ~
-    get {
-      (path("hashes" / Segment) | path("v1" / "hashes" / Segment)) { hash =>
-        respondWithMediaType(MediaTypes.`application/json`) {
-          complete {
-            val futureRsp = for {
-              optUrl <- shortydb.getUrl(hash)
-              count <- shortydb.getNumClicks(hash)
-            } yield (optUrl map { url => HashMetricsResponse(hash, url, count) })
-            futureRsp map {
-              case Some(metrics) => HttpResponse(status = OK, entity = HttpEntity(metrics.toJson.compactPrint))
-              case None => HttpResponse(status = NotFound)
+      } ~
+      get {
+        (path("shorty" / "hashes" / Segment) | path("shorty" / "v1" / "hashes" / Segment)) { hash =>
+          respondWithMediaType(MediaTypes.`application/json`) {
+            complete {
+              val futureRsp = for {
+                optUrl <- shortydb.getUrl(hash)
+                count <- shortydb.getNumClicks(hash)
+              } yield (optUrl map { url => HashMetricsResponse(hash, url, count) })
+              futureRsp map {
+                case Some(metrics) => HttpResponse(status = OK, entity = HttpEntity(metrics.toJson.compactPrint))
+                case None => HttpResponse(status = NotFound)
+              }
             }
           }
-        }
-      } ~
-      (path("redirect" / Segment) | path("v1" / "redirect" / Segment)) { hash =>
-        clientIP { ip =>
-          complete {
-            shortydb.getUrl(hash) map {
-              case Some(url) =>
-                shortydb.addClick(hash, ip.value)
-                HttpResponse(status = PermanentRedirect, headers = Location(url) :: Nil)
-              case None => HttpResponse(NotFound)
+        } ~
+        (path("shorty" / "redirect" / Segment) | path("shorty" / "v1" / "redirect" / Segment)) { hash =>
+          clientIP { ip =>
+            complete {
+              shortydb.getUrl(hash) map {
+                case Some(url) =>
+                  shortydb.addClick(hash, ip.value)
+                  HttpResponse(status = PermanentRedirect, headers = Location(url) :: Nil)
+                case None => HttpResponse(NotFound)
+              }
             }
           }
         }

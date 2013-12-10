@@ -1,7 +1,6 @@
 package org.derekwyatt.shorty
 
 import com.github.mauricio.async.db.QueryResult
-import org.derekwyatt.shorty.postgresql.NilDBComponent
 import scala.collection.mutable
 import scala.concurrent.{ExecutionContext, Future, future}
 import scala.reflect.runtime.universe._

@@ -1,4 +1,4 @@
-package org.derekwyatt.shorty.postgresql
+package org.derekwyatt.shorty
 
 import scala.concurrent.{ExecutionContext, Future, future}
 import com.github.mauricio.async.db.QueryResult
