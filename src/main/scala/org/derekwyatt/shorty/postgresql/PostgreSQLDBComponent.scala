@@ -114,13 +114,14 @@ trait PostgreSQLConfiguration extends ConfigComponent {
 trait PostgreSQLDBComponent extends DBComponent with PostgreSQLConfiguration {
   class PostgreSQLDB extends DB {
     val logger = LoggerFactory.getLogger(getClass.getName)
+    logger.info(s"Connecting with ${config.connectionUrl}")
     val configuration = URLParser.parse(config.connectionUrl)
     val pool: ConnectionPool[PostgreSQLConnection] =
       new ConnectionPool(new PostgreSQLConnectionFactory(configuration),
                          PoolConfiguration(maxObjects = config.maxPoolSize,
                                            maxIdle = config.maxPoolIdleConnections,
                                            maxQueueSize = config.maxPoolQueueSize))
-    logger.error(s"${Await.result(pool.connect, 30.seconds)}")
+    Await.result(pool.connect, 30.seconds)
 
     /**
      * See [[DBComponent#DB#insert]].
