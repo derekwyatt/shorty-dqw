@@ -11,6 +11,7 @@ scalaVersion := "2.10.3"
 resolvers += "spray repo" at "http://repo.spray.io"
 
 libraryDependencies := Seq(
+  "ch.qos.logback"         % "logback-classic"       % "1.0.13",
   "com.typesafe.akka"     %% "akka-actor"            % "2.2.3",
   "com.typesafe.akka"     %% "akka-slf4j"            % "2.2.3",
   "com.github.mauricio"   %% "postgresql-async"      % "0.2.9",

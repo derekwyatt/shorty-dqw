@@ -9,6 +9,7 @@ import com.github.mauricio.async.db.postgresql.pool.PostgreSQLConnectionFactory
 import org.derekwyatt.ConfigComponent
 import scala.concurrent.duration._
 import scala.concurrent.{Await, ExecutionContext, Future}
+import org.slf4j.{Logger, LoggerFactory}
 
 /**
  * This exception is thrown when we fail to find the right format for a given
@@ -112,13 +113,14 @@ trait PostgreSQLConfiguration extends ConfigComponent {
  */
 trait PostgreSQLDBComponent extends DBComponent with PostgreSQLConfiguration {
   class PostgreSQLDB extends DB {
+    val logger = LoggerFactory.getLogger(getClass.getName)
     val configuration = URLParser.parse(config.connectionUrl)
     val pool: ConnectionPool[PostgreSQLConnection] =
       new ConnectionPool(new PostgreSQLConnectionFactory(configuration),
                          PoolConfiguration(maxObjects = config.maxPoolSize,
                                            maxIdle = config.maxPoolIdleConnections,
                                            maxQueueSize = config.maxPoolQueueSize))
-    Await.result(pool.connect, 30.seconds)
+    logger.error(s"${Await.result(pool.connect, 30.seconds)}")
 
     /**
      * See [[DBComponent#DB#insert]].
