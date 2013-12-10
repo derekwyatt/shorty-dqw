@@ -13,11 +13,26 @@ import spray.http.HttpHeaders.Location
 import spray.httpx.SprayJsonSupport
 import spray.routing.HttpService
 
+/**
+ * Defines helpers for the [[ShortyService]].
+ */
 object ShortyService {
   import spray.http.HttpHeaders.RawHeader
+  /**
+   * Spray fails to define the `Retry-After` header, which we need when
+   * implementing the circuit breaker.
+   *
+   * @param seconds The number of seconds that the client should wait before
+   * retrying.
+   * @return The [[spray.http.HttpHeader]] that represents the `Retry-After`
+   * instance.
+   */
   def `Retry-After`(seconds: FiniteDuration): HttpHeader = RawHeader("Retry-After", seconds.toSeconds.toString)
 }
 
+/**
+ * Configuration for the service itself.
+ */
 trait ShortyServiceConfigComponent extends ConfigComponent {
   type Configuration <: ShortyServiceConfig
 
@@ -28,24 +43,60 @@ trait ShortyServiceConfigComponent extends ConfigComponent {
   }
 }
 
+/**
+ * The HTTP service that provides the API endpoint for REST.
+ */
 trait ShortyService extends HttpService
                        with SprayJsonSupport
-                       with ShortyProtocol { this: ShortyDBComponent with ShortyLogicComponent with DBComponent with ShortyServiceConfigComponent =>
+                       with ShortyProtocol { this: ShortyDBComponent with ShortyLogicComponent
+                                                                     with DBComponent
+                                                                     with ShortyServiceConfigComponent =>
 
+  /**
+   * The calls we're going to make are non-blocking and require a that we
+   * execute a [[scala.concurrent.Future]], which needs an
+   * [[scala.concurrent.ExecutionContext]] that is to be provided by the guy
+   * mixing in this service.
+   */
   implicit val futureEC: ExecutionContext
+
+  /**
+   * The circuit breaker needs to set up some timers in order to get its state
+   * machine going and it does that by using this instance of
+   * [[akka.actor.Scheduler]].
+   */
   val scheduler: Scheduler
 
+  /**
+   * Given an instance of a [[HashCreateRequest]] and enough information, this
+   * method instantiates an appropriate [[HashCreateResponse]].
+   *
+   * @param hash The hash that was created.
+   * @param host The hostname that the client can come back to in order to
+   * retrieve metrics about the hash.
+   * @param req The [[HashCreateRequest]] that the client supplied.
+   * @return The [[HashCreateResponse]] to send back to the client.
+   */
   def hashCreateResponse(hash: String, host: String, req: HashCreateRequest): HashCreateResponse =
     HashCreateResponse(req.encodedPrefix.map(pre => s"$pre/$hash").getOrElse(hash),
       req.urlToShorten,
       s"http://$host/hashes/$hash")
 
+  /**
+   * In order to protect the service (and the database) from being asked to do
+   * too much, we use a circuit breaker.  This circuit breaker fronts all of the
+   * work that could fail or time out, so that we can open it when we're in a
+   * bad state.
+   */
   val circuitBreaker = new CircuitBreaker(
     scheduler,
     maxFailures = config.circuitBreakerMaxFailures,
     callTimeout = config.circuitBreakerCallTimeout,
     resetTimeout = config.circuitBreakerResetTimeout)
 
+  /**
+   * The HTTP route that has been defined for REST
+   */
   val route =
     post {
       (path("hashes") | path("v1" / "hashes")) {
