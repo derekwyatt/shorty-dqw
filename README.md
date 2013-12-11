@@ -25,18 +25,18 @@ The API works as follows:
   you'll still get the hash, but the `encodedPrefix` will be the prefix of the
   hash.  For example:
 
-    {
-      "urlToShorten": "http://somewhere.com/and/a/path",
-      "encodedPrefix": "http://shor.ty/"
-    }
+      {
+        "urlToShorten": "http://somewhere.com/and/a/path",
+        "encodedPrefix": "http://shor.ty/sd8eW"
+      }
 
   The response is in JSON format, containing:
 
-    {
-      "shortened": "the resulting hash with or without the encodedPrefix",
-      "equatesTo": "the same URL you asked to have shortened",
-      "ref": "a URL reference to can use to retrieve metrics about the hash"
-    }
+      {
+        "shortened": "the resulting hash with or without the encodedPrefix",
+        "equatesTo": "the same URL you asked to have shortened",
+        "ref": "a URL reference to can use to retrieve metrics about the hash"
+      }
 
   **Return codes**:
   
@@ -48,11 +48,11 @@ The API works as follows:
   you've specified.  This URL is available as the `ref` memeber of the response
   from the `POST`.  The response you receive is a JSON payload that looks like:
 
-    {
-      "hash": "the hash you specified",
-      "url": "the url to which the hash resolves",
-      "clickCount": the number of clicks that this hash has received
-    }
+      {
+        "hash": "the hash you specified",
+        "url": "the url to which the hash resolves",
+        "clickCount": the number of clicks that this hash has received
+      }
 
   **Return codes**:
   
@@ -63,6 +63,8 @@ The API works as follows:
 
 - `GET` to `/shorty/redirect/<hash>` will return a permanent redirect to the URL
   to which the hash resolves.
+
+  **Return codes**:
 
   - 308 (permanent redirect) on success
   - 404 if the hash can't be resolved
