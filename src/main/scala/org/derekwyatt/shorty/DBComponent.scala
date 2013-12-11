@@ -47,6 +47,18 @@ trait DBComponent {
     def insert(stmt: PSQLStatement)(implicit ec: ExecutionContext): Future[QueryResult]
 
     /**
+     * Evaluates the given statmenet for the purpose of updating information in
+     * the database.
+     *
+     * @param stmt The statement that we want executed.
+     * @param ec The [[scala.concurrent.ExecutionContext]] on which the database
+     * query should be executed.
+     * @return The [[scala.concurrent.Future]] that holds the eventual
+     * `QueryResult`.
+     */
+    def update(stmt: PSQLStatement)(implicit ec: ExecutionContext): Future[QueryResult]
+
+    /**
      * Evaluates the given statmenet for the purpose of selecting information
      * from the database.
      *

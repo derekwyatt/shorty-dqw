@@ -83,14 +83,14 @@ trait RandomShortyLogicComponent extends ShortyLogicComponent {
  * call.
  */
 trait IncrementingShortyLogicComponent extends ShortyLogicComponent {
-  import java.util.concurrent.atomic.AtomicLong
+  import java.util.concurrent.atomic.AtomicInteger
   import ShortyLogic._
 
   /**
    * See [[ShortyLogicComponent#logic]]
    */
   object logic extends ShortyLogic {
-    val nextHash = new AtomicLong(0)
+    val nextHash = new AtomicInteger(0)
     /**
      * See [[ShortyLogicComponent#ShortyLogic#shorten]]
      */
@@ -101,6 +101,72 @@ trait IncrementingShortyLogicComponent extends ShortyLogicComponent {
         idx: Int = (hashNum / (size * i).max(1)).toInt % size
       } yield chars(idx)
       hashStr.mkString
+    }
+  }
+}
+
+trait ShardedShortyLogicComponent extends ShortyLogicComponent with DBComponent {
+  import java.util.concurrent.atomic.AtomicInteger
+  import ShortyLogic._
+
+  /**
+   * The unique identifier of this server.
+   */
+  val myId: String
+
+  trait ShardLogic extends ShortyLogic {
+    protected val nextHash = new AtomicInteger(-1)
+    protected val hashLimit = new AtomicInteger(-1)
+    protected val rangeSize = 50000
+    protected val bucketLimit = 1000
+
+    protected val incrementStmt = PSQLStatement(s"UPDATE id_range_owners SET current_num = current_num + $bucketLimit where owner = ? AND range_end = ?",
+                                        List(myId, hashLimit.get))
+    protected val newRangeStmt = PSQLStatement("INSERT INTO id_range_owners (owner, range_end, current_num) VALUES (?, nextval('id_range'), 0)",
+                                        List(myId))
+    protected val getHashValuesStmt = PSQLStatement("SELECT current_num, range_end FROM id_range_owners WHERE owner = ? ORDER BY range_end",
+                                        List(myId))
+
+    protected def generateHash(): String = {
+      val hash = nextHash.incrementAndGet
+      val hashStr = for {
+        i <- 0 until 5
+        idx: Int = (hash / (size * i).max(1)).toInt % size
+      } yield chars(idx)
+      hashStr.mkString
+    }
+
+    protected def incrementColumn()(implicit ec: ExecutionContext): Future[Unit] = db.update(incrementStmt) map { _ => () }
+
+    protected def grabNewRange()(implicit ec: ExecutionContext): Future[Unit] = db.insert(newRangeStmt) map { _ => () }
+
+    protected def seedHashValues()(implicit ec: ExecutionContext): Future[Unit] = db.select(getHashValuesStmt) map { result =>
+      result.rows.foreach { rows =>
+        val row = rows.last
+        val rangeEnd = row("range_end").asInstanceOf[Int]
+        val currentNum = row("current_num").asInstanceOf[Int]
+        hashLimit.set(rangeEnd)
+        nextHash.set((rangeEnd - rangeSize) + currentNum)
+      }
+    }
+
+    /**
+     * See [[ShortyLogicComponent#ShortyLogic#shorten]]
+     */
+    def shorten(url: String)(implicit ec: ExecutionContext): Future[String] = {
+      if (nextHash.get == -1) {
+        println("A")
+        seedHashValues() map { _ => generateHash }
+      } else if (nextHash.get == hashLimit.get) {
+        println("B")
+        grabNewRange map { _ => generateHash }
+      } else if (nextHash.get % bucketLimit == 0) {
+        println("C")
+        incrementColumn map { _ => generateHash }
+      } else {
+        println("D")
+        future(generateHash)
+      }
     }
   }
 }

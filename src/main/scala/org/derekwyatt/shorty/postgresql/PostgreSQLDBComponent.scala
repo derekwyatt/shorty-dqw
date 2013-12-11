@@ -62,6 +62,12 @@ trait PostgreSQLDBComponent extends DBComponent with PostgreSQLConfiguration {
       pool.sendPreparedStatement(stmt.stmt, stmt.values)
 
     /**
+     * See [[DBComponent#DB#update]].
+     */
+    def update(stmt: PSQLStatement)(implicit ec: ExecutionContext): Future[QueryResult] =
+      pool.sendPreparedStatement(stmt.stmt, stmt.values)
+
+    /**
      * See [[DBComponent#DB#select]].
      */
     def select(stmt: PSQLStatement)(implicit ec: ExecutionContext): Future[QueryResult] =
