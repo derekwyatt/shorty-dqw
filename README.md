@@ -91,7 +91,11 @@ Goal 2) was met. It's fully non-blocking and asynchronous.
 that require a bit of effort, but it's incredibly flexible and deterministic in
 the face of a lot of asynchronous code.  Hooking up
 [Akka](http://akka.io "Akka")'s [Circuit Breaker](http://doc.akka.io/docs/akka/2.2.3/common/circuitbreaker.html "Circuit Breaker")
-really felt good.  Simple, effective, just damn awesome.
+really felt good.  Simple, effective, just damn awesome.  I also enjoyed testing
+out the [PostgreSQL Async Library](https://github.com/mauricio/postgresql-async "PostgreSQL Async Library")
+for the first time.  [Maurício](https://github.com/mauricio "Maurício")'s done a
+decent job as far as I can tell.  It's good enough for my purposes, but I can't
+say I've done a thorough investigation of it.
 
 Goal 3) hasn't really been met all that well.  The logic that creates the hash
 has a number of strategies, but the one used in the production code is "random".
@@ -133,3 +137,43 @@ The idea is pretty simple:
 The production code still runs the non-sharded version, since the sharded
 version doesn't work all that well right now.
 
+Conclusions
+-----------
+
+I'm not sure I'm "done" with this server yet, but it was fun and yielded some
+decent learnings.
+
+- Basic deployment to Heroku is cool.  It's simple and effective, if painfully
+  slow.  The fact that it does an `sbt clean` is annoying; I tried to figure out
+  how to get it to stop doing that, but failed to find anything.
+- I'm not sure how Heroku deploys truly scalable solutions, with load
+  balancers, cache servers, DNS jiggery pokery, and so forth, but the initial
+  investigation was keen.
+- The "slowness of deployment" does kill productivity when you actually need
+  to do it (most development is all local) because it's death-by-a-million
+  cuts at that point.  I hate hurry-up-and-wait loops.
+- PostgreSQL integration was straightforward and easy with Maurício's library.
+  For something like this, I might not necessarily choose PostgreSQL out of the
+  gate, but it does have a great reputation as a key/value store, and that's
+  essentially what I'm using it for.
+  - The recording of metrics might not be best here.  I would probably use
+    Cassandra for this in production because of the "big table" and temporal
+    nature of the click data being recorded.
+  - Couple that with the fact that it's high write / low read and Cassandra is
+    probably a winner.
+- It bugs me that I wasn't able to get the sharded solution working to a level
+  of deployability, but I'm just out of time for this sort of work right now.
+  - With a bit more effort, it would probably be a pretty decent solution, but
+    the devil's in the details.
+  - All of the async work provides lots of race conditions and so forth, which
+    makes it a decent candiate for Actor work.
+  - The simplest thing would be to put it up as a single Actor service, which
+    would create a bottleneck that might never be seen.  The time for TCP
+    connections to be made, and Spray to do its work may completely dwarf the
+    time it takes to generate a hash in sequence.
+  - Another approach would have been to use an Agent (or set of Agents) to
+    synchronize the effort.
+  - Essentially, I want to code this at a higher level than what I would have to
+    do now, which is adding some synchronization primitives.
+- Anyway... fun stuff. I hope to come back to this at some point to play with it
+  a bit more.
