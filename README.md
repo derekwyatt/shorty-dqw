@@ -15,10 +15,10 @@ The API works as follows:
 - `POST` to `/shorty/hashes` in order to create a new 5 character hash to a new
   URL, providing an `application/json` body that corresponds to the following:
 
-    {
-      "urlToShorten": "the url that you want to have shortened",
-      "encodedPrefix": "whatever you want shoved on the beginning of the hash"
-    }
+      {
+        "urlToShorten": "the url that you want to have shortened",
+        "encodedPrefix": "whatever you want shoved on the beginning of the hash"
+      }
 
   Note that the `encodedPrefix` is **optional**.  If you don't specify anything
   then you'll get the hash in the response.  If you specify something then
