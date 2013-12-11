@@ -2,13 +2,13 @@ package org.derekwyatt.shorty
 
 import akka.actor.Scheduler
 import akka.event.Logging
-import akka.pattern.CircuitBreaker
+import akka.pattern.{CircuitBreaker, CircuitBreakerOpenException}
 import org.derekwyatt.ConfigComponent
 import scala.concurrent.duration._
-import scala.concurrent.{ExecutionContext, future}
+import scala.concurrent.{ExecutionContext, Future, future}
 import spray.http.{ContentTypes, HttpHeader, MediaTypes}
 import spray.http.StatusCodes._
-import spray.http.{HttpRequest, HttpResponse, HttpEntity}
+import spray.http.{HttpRequest, HttpResponse, HttpEntity, StatusCode}
 import spray.http.HttpHeaders.Location
 import spray.httpx.SprayJsonSupport
 import spray.routing.{HttpService, Rejection}
@@ -53,6 +53,7 @@ trait ShortyService extends HttpService
                        with DebuggingDirectives { this: ShortyDBComponent with ShortyLogicComponent
                                                                           with DBComponent
                                                                           with ShortyServiceConfigComponent =>
+  import ShortyService._
 
   /**
    * The calls we're going to make are non-blocking and require a that we
@@ -79,15 +80,35 @@ trait ShortyService extends HttpService
    * @param req The [[HashCreateRequest]] that the client supplied.
    * @return The [[HashCreateResponse]] to send back to the client.
    */
-  def hashCreateResponse(hash: String, host: String, req: HashCreateRequest): HashCreateResponse =
-    HashCreateResponse(req.encodedPrefix.map(pre => s"$pre/$hash").getOrElse(hash),
-      req.urlToShorten,
-      s"http://$host/hashes/$hash")
+  def hashCreateResponse(hash: String, host: String, req: HashCreateRequest): StatusCode => HttpResponse = { code =>
+    new HttpResponse(status = code,
+                     entity = HttpEntity(ContentTypes.`application/json`, 
+                                         HashCreateResponse(req.encodedPrefix.map(pre => s"$pre/$hash").getOrElse(hash),
+                                                                req.urlToShorten,
+                                                                s"http://$host/hashes/$hash").toJson.compactPrint))
+  }
 
-  def createLogEntry(request: HttpRequest, text: String): Some[LogEntry] =
+  /**
+   * Ripped off from
+   * https://groups.google.com/forum/#!searchin/spray-user/debug$20route/spray-user/rc9bYO_SxU8/0tE0NgJ90_IJ.
+   * Simplifies the creation of a [[spray.routing.directives.LogEntry]].
+   *
+   * @param request The [[spray.https.HttpRequest]] being processed.
+   * @param text The message to be logged.
+   * @return The created [[spray.routing.directives.LogEntry]].
+   */
+  private def createLogEntry(request: HttpRequest, text: String): Some[LogEntry] =
     Some(LogEntry(s"#### Request $request => $text", Logging.DebugLevel))
   
-  def myLog(request: HttpRequest): Any => Option[LogEntry] = { 
+  /**
+   * Ripped off and simplified from
+   * https://groups.google.com/forum/#!searchin/spray-user/debug$20route/spray-user/rc9bYO_SxU8/0tE0NgJ90_IJ.
+   *
+   * @param request The [[spray.http.HttpRequest]] that's being processed.
+   * @return A function that can transform anything into an [[scala.Option]]al
+   * [[spray.routing.directives.LogEntry]].
+   */
+  private def myLog(request: HttpRequest): Any => Option[LogEntry] = { 
     case x: HttpResponse => {
       x.entity match {
         case m => createLogEntry(request, m.toString)
@@ -109,6 +130,15 @@ trait ShortyService extends HttpService
     callTimeout = config.circuitBreakerCallTimeout,
     resetTimeout = config.circuitBreakerResetTimeout)
 
+  def dbProtected(f: => Future[HttpResponse]): Future[HttpResponse] = circuitBreaker.withCircuitBreaker {
+    f recover {
+      case e: CircuitBreakerOpenException =>
+        new HttpResponse(status = ServiceUnavailable, headers = List(`Retry-After`(e.remainingDuration)))
+      case e =>
+        throw e
+    }
+  }
+
   /**
    * The HTTP route that has been defined for REST
    */
@@ -120,14 +150,19 @@ trait ShortyService extends HttpService
             headerValueByName("Host") { host =>
               entity(as[HashCreateRequest]) { req =>
                 complete {
-                  shortydb.getHash(req.urlToShorten) flatMap {
-                    case Some(hash) => 
-                      future(hashCreateResponse(hash, host, req))
-                    case None =>
-                      for {
-                        hash <- logic.shorten(req.urlToShorten)
-                        finished <- shortydb.insertHash(hash, req.urlToShorten)
-                      } yield hashCreateResponse(hash, host, req)
+                  dbProtected {
+                    shortydb.getHash(req.urlToShorten) flatMap {
+                      case Some(hash) => 
+                        future(hashCreateResponse(hash, host, req)(OK))
+                      case None =>
+                        for {
+                          hash <- logic.shorten(req.urlToShorten)
+                          // There's a clear bug here. If the hash collides with
+                          // something we should generate another one, but I'm
+                          // going to assume it works right now (yeah...)
+                          finished <- shortydb.insertHash(hash, req.urlToShorten)
+                        } yield hashCreateResponse(hash, host, req)(OK)
+                    }
                   }
                 }
               }
@@ -139,13 +174,15 @@ trait ShortyService extends HttpService
         (path("shorty" / "hashes" / Segment) | path("shorty" / "v1" / "hashes" / Segment)) { hash =>
           respondWithMediaType(MediaTypes.`application/json`) {
             complete {
-              val futureRsp = for {
-                optUrl <- shortydb.getUrl(hash)
-                count <- shortydb.getNumClicks(hash)
-              } yield (optUrl map { url => HashMetricsResponse(hash, url, count) })
-              futureRsp map {
-                case Some(metrics) => HttpResponse(status = OK, entity = HttpEntity(metrics.toJson.compactPrint))
-                case None => HttpResponse(status = NotFound)
+              dbProtected {
+                val futureRsp = for {
+                  optUrl <- shortydb.getUrl(hash)
+                  count <- shortydb.getNumClicks(hash)
+                } yield (optUrl map { url => HashMetricsResponse(hash, url, count) })
+                futureRsp map {
+                  case Some(metrics) => HttpResponse(status = OK, entity = HttpEntity(metrics.toJson.compactPrint))
+                  case None => HttpResponse(status = NotFound)
+                }
               }
             }
           }
@@ -155,6 +192,7 @@ trait ShortyService extends HttpService
             complete {
               shortydb.getUrl(hash) map {
                 case Some(url) =>
+                  // If this fails, we're not going to care
                   shortydb.addClick(hash, ip.value)
                   HttpResponse(status = PermanentRedirect, headers = Location(url) :: Nil)
                 case None => HttpResponse(NotFound)
