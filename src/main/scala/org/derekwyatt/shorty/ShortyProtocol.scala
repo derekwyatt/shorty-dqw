@@ -24,7 +24,7 @@ trait ShortyProtocol extends DefaultJsonProtocol {
    * @param ref The URL that can be GETted in order to retrieve metrics about
    * the shortened URL.
    */
-  case class HashCreateResponse(shortenedUrl: String, equatesTo: String, ref: String)
+  case class HashCreateResponse(shortened: String, equatesTo: String, ref: String)
 
   /**
    * When a GET call to the value returned [[HashCreateResponse#ref]] is made,

@@ -3,6 +3,8 @@ package org.derekwyatt.shorty
 import akka.actor.Scheduler
 import akka.event.Logging
 import akka.pattern.{CircuitBreaker, CircuitBreakerOpenException}
+import com.github.mauricio.async.db.postgresql.exceptions.GenericDatabaseException
+import com.github.mauricio.async.db.postgresql.messages.backend.InformationMessage
 import org.derekwyatt.ConfigComponent
 import scala.concurrent.duration._
 import scala.concurrent.{ExecutionContext, Future, future}
@@ -13,6 +15,7 @@ import spray.http.HttpHeaders.Location
 import spray.httpx.SprayJsonSupport
 import spray.routing.{HttpService, Rejection}
 import spray.routing.directives.{DebuggingDirectives, LogEntry}
+import spray.util.LoggingContext
 
 /**
  * Defines helpers for the [[ShortyService]].
@@ -85,7 +88,7 @@ trait ShortyService extends HttpService
                      entity = HttpEntity(ContentTypes.`application/json`, 
                                          HashCreateResponse(req.encodedPrefix.map(pre => s"$pre/$hash").getOrElse(hash),
                                                                 req.urlToShorten,
-                                                                s"http://$host/hashes/$hash").toJson.compactPrint))
+                                                                s"http://$host/shorty/hashes/$hash").toJson.compactPrint))
   }
 
   /**
@@ -130,12 +133,58 @@ trait ShortyService extends HttpService
     callTimeout = config.circuitBreakerCallTimeout,
     resetTimeout = config.circuitBreakerResetTimeout)
 
-  def dbProtected(f: => Future[HttpResponse]): Future[HttpResponse] = circuitBreaker.withCircuitBreaker {
-    f recover {
-      case e: CircuitBreakerOpenException =>
-        new HttpResponse(status = ServiceUnavailable, headers = List(`Retry-After`(e.remainingDuration)))
-      case e =>
-        throw e
+  /**
+   * Protects a call to the back-end system (in this case, really just the
+   * database) using the circuit breaker.  If the circuit is open, then we will
+   * transform the exception into a proper 503 response.
+   *
+   * @param f The function to execute within the circuit breaker.
+   * @return The [[scala.concurrent.Future]] [[spray.http.HttpResponse]] that is
+   * to be returned to the client.
+   */
+  def dbProtected(f: => Future[HttpResponse]): Future[HttpResponse] = circuitBreaker.withCircuitBreaker(f) recover {
+    case e: CircuitBreakerOpenException =>
+      new HttpResponse(status = ServiceUnavailable, headers = List(`Retry-After`(e.remainingDuration)))
+    case e =>
+      throw e
+  }
+
+  /**
+   * Creates the hash and puts it into the database. If there is a conflict,
+   * this method will retry until things are successful, or the maxium number of
+   * attempts has been reached.
+   *
+   * @param host The host to which the request was made.
+   * @param req The [[HashCreateRequest]] that was made.
+   * @param callCount The number of calls that have been made thus far, so that
+   * we can figure out when to finally fail.
+   * @param log The instance of [[spray.util.LoggingContext]] we can use to log
+   * the error when things finally go bad.
+   * @return A [[scala.concurrent.Future]] to the eventual
+   * [[spray.http.HttpResponse]].
+   */
+  def makeHash(host: String, req: HashCreateRequest, callCount: Int = 0)(implicit log: LoggingContext): Future[HttpResponse] = {
+    // TDOD: should be a configurable number
+    if (callCount == 10) {
+      log.error(s"Reached a maximum call count, trying to create a hash for ${req.urlToShorten}")
+      future(HttpResponse(status = InternalServerError))
+    } else {
+      shortydb.getHash(req.urlToShorten) flatMap {
+        case Some(hash) => 
+          future(hashCreateResponse(hash, host, req)(OK))
+        case None =>
+          val attempt = for {
+            hash <- logic.shorten(req.urlToShorten)
+            finished <- shortydb.insertHash(hash, req.urlToShorten)
+          } yield hashCreateResponse(hash, host, req)(OK)
+          attempt recoverWith {
+            case e: GenericDatabaseException =>
+              if (e.errorMessage.fields(InformationMessage.Detail).contains("already exists"))
+                makeHash(host, req, callCount + 1)
+              else
+                throw e
+          }
+      }
     }
   }
 
@@ -151,18 +200,7 @@ trait ShortyService extends HttpService
               entity(as[HashCreateRequest]) { req =>
                 complete {
                   dbProtected {
-                    shortydb.getHash(req.urlToShorten) flatMap {
-                      case Some(hash) => 
-                        future(hashCreateResponse(hash, host, req)(OK))
-                      case None =>
-                        for {
-                          hash <- logic.shorten(req.urlToShorten)
-                          // There's a clear bug here. If the hash collides with
-                          // something we should generate another one, but I'm
-                          // going to assume it works right now (yeah...)
-                          finished <- shortydb.insertHash(hash, req.urlToShorten)
-                        } yield hashCreateResponse(hash, host, req)(OK)
-                    }
+                    makeHash(host, req)
                   }
                 }
               }
